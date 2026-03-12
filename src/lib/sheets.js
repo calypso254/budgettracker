@@ -29,6 +29,7 @@ export const RECURRING_BILLS_HEADERS = [
 let gisScriptPromise
 let clientInitPromise
 let tokenClient
+let accessPromise
 
 function loadGoogleApiClient(apiName) {
   return new Promise((resolve) => {
@@ -142,7 +143,18 @@ function requestAccessToken() {
 
 async function ensureSheetsAccess() {
   await initializeSheetsClient()
-  await requestAccessToken()
+
+  if (gapi.client.getToken()?.access_token) {
+    return
+  }
+
+  if (!accessPromise) {
+    accessPromise = requestAccessToken().finally(() => {
+      accessPromise = null
+    })
+  }
+
+  await accessPromise
 }
 
 async function listSheetRows(sheetName) {
