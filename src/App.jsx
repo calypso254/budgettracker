@@ -12,17 +12,18 @@ import {
 } from './lib/sheets.js'
 import {
   buildBillSnapshots,
+  buildIncomeSnapshots,
   buildChartData,
   buildNotificationMessage,
   CHART_OPTIONS,
   DEFAULT_CATEGORIES,
   DEMO_SEED,
   formatAmount,
+  getCurrentMonthIncomeTotal,
   getLocalIsoDate,
   getMonthKey,
   getStoredUnlockState,
   isExpense,
-  isIncome,
   parseAmount,
   sortTransactionsNewestFirst,
 } from './lib/finance.js'
@@ -48,8 +49,10 @@ function App() {
   const [selectedBill, setSelectedBill] = useState(
     DEMO_SEED.recurringBills[0]?.Bill_Name ?? '',
   )
-  const [partialPaymentBill, setPartialPaymentBill] = useState(null)
-  const [partialPaymentAmount, setPartialPaymentAmount] = useState('')
+  const [paymentBill, setPaymentBill] = useState(null)
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [receiptIncome, setReceiptIncome] = useState(null)
+  const [receiptAmount, setReceiptAmount] = useState('')
   const [billForm, setBillForm] = useState({
     billName: '',
     category: 'Housing',
@@ -88,17 +91,13 @@ function App() {
     ),
   ].sort((left, right) => left.localeCompare(right))
   const billSnapshots = buildBillSnapshots(recurringBills, transactions, today)
+  const incomeSnapshots = buildIncomeSnapshots(recurringIncome, transactions, today)
   const billOptions = billSnapshots.map((bill) => bill.Bill_Name)
   const currentMonthKey = getMonthKey(today)
   const selectedChartBill = billOptions.includes(selectedBill)
     ? selectedBill
     : billOptions[0] ?? ''
-  const currentMonthIncome = transactions
-    .filter(
-      (transaction) =>
-        getMonthKey(transaction.Date) === currentMonthKey && isIncome(transaction),
-    )
-    .reduce((total, transaction) => total + parseAmount(transaction.Amount), 0)
+  const currentMonthIncome = getCurrentMonthIncomeTotal(transactions, today)
   const currentMonthExpenses = transactions
     .filter(
       (transaction) =>
@@ -421,14 +420,19 @@ function App() {
     })
   }
 
-  function openPartialPayment(bill) {
-    setPartialPaymentBill(bill.Bill_Name)
-    setPartialPaymentAmount(Math.max(bill.remaining / 2, 1).toFixed(2))
+  function openPaymentForm(bill) {
+    setPaymentBill(bill.Bill_Name)
+    setPaymentAmount(Math.max(bill.remaining, 1).toFixed(2))
+  }
+
+  function openReceiptForm(income) {
+    setReceiptIncome(income.Income_Name)
+    setReceiptAmount(Math.max(income.remaining, 1).toFixed(2))
   }
 
   async function handleMarkPaid(bill) {
     if (bill.remaining <= 0) return
-    await persistTransaction(
+    const saved = await persistTransaction(
       {
         Date: getLocalIsoDate(new Date()),
         Type: 'Expense',
@@ -440,17 +444,20 @@ function App() {
       },
       `${bill.Bill_Name} marked paid.`,
     )
+
+    if (!saved) return
+
+    setPaymentBill(null)
+    setPaymentAmount('')
   }
 
-  async function handlePartialPaymentSubmit(event, bill) {
+  async function handlePaymentSubmit(event, bill) {
     event.preventDefault()
-    const amount = parseAmount(partialPaymentAmount)
-    if (amount <= 0 || amount > bill.remaining) {
+    const amount = parseAmount(paymentAmount)
+    if (amount <= 0) {
       setNotice({
         tone: 'danger',
-        text: `Enter a partial payment above $0.00 and no larger than ${formatAmount(
-          bill.remaining,
-        )}.`,
+        text: 'Enter a payment amount above $0.00.',
       })
       return
     }
@@ -463,14 +470,64 @@ function App() {
         Payee_Source: bill.Bill_Name,
         Amount: amount.toFixed(2),
         Applied_To_Bill: bill.Bill_Name,
-        Notes: 'Partial payment from dashboard',
+        Notes: 'Custom payment from dashboard',
       },
       `${formatAmount(amount)} applied to ${bill.Bill_Name}.`,
     )
     if (!saved) return
 
-    setPartialPaymentBill(null)
-    setPartialPaymentAmount('')
+    setPaymentBill(null)
+    setPaymentAmount('')
+  }
+
+  async function handleMarkReceived(income) {
+    if (income.remaining <= 0) return
+    const saved = await persistTransaction(
+      {
+        Date: getLocalIsoDate(new Date()),
+        Type: 'Income',
+        Category: income.Category,
+        Payee_Source: income.Income_Name,
+        Amount: income.remaining.toFixed(2),
+        Applied_To_Bill: '',
+        Notes: income.Notes?.trim() || 'Marked received from dashboard',
+      },
+      `${income.Income_Name} marked received.`,
+    )
+
+    if (!saved) return
+
+    setReceiptIncome(null)
+    setReceiptAmount('')
+  }
+
+  async function handleReceiptSubmit(event, income) {
+    event.preventDefault()
+    const amount = parseAmount(receiptAmount)
+    if (amount <= 0) {
+      setNotice({
+        tone: 'danger',
+        text: 'Enter a receipt amount above $0.00.',
+      })
+      return
+    }
+
+    const saved = await persistTransaction(
+      {
+        Date: getLocalIsoDate(new Date()),
+        Type: 'Income',
+        Category: income.Category,
+        Payee_Source: income.Income_Name,
+        Amount: amount.toFixed(2),
+        Applied_To_Bill: '',
+        Notes: income.Notes?.trim() || 'Receipt logged from dashboard',
+      },
+      `${formatAmount(amount)} received from ${income.Income_Name}.`,
+    )
+    if (!saved) return
+
+    setReceiptIncome(null)
+    setReceiptAmount('')
   }
 
   if (!isUnlocked) {
@@ -609,26 +666,34 @@ function App() {
             {
               id: 'dashboard',
               eyebrow: 'Section 1',
-              title: 'Dashboard and Active Bills',
-              subtitle: 'Monthly totals up top, bill actions below.',
-              meta: `${billSnapshots.filter((bill) => bill.remaining > 0).length} open bills`,
+              title: 'Dashboard, Bills, and Income',
+              subtitle: 'Monthly totals, bill payments, and recurring income receipts.',
+              meta: `${billSnapshots.filter((bill) => bill.remaining > 0).length} open bills, ${incomeSnapshots.filter((income) => income.remaining > 0).length} income sources pending`,
               content: (
                 <DashboardSection
                   billSnapshots={billSnapshots}
                   currentMonthExpenses={currentMonthExpenses}
                   currentMonthIncome={currentMonthIncome}
                   currentMonthKey={currentMonthKey}
-                  partialPaymentAmount={partialPaymentAmount}
-                  partialPaymentBill={partialPaymentBill}
-                  setPartialPaymentAmount={setPartialPaymentAmount}
-                  setPartialPaymentBill={setPartialPaymentBill}
+                  incomeSnapshots={incomeSnapshots}
+                  paymentAmount={paymentAmount}
+                  paymentBill={paymentBill}
+                  receiptAmount={receiptAmount}
+                  receiptIncome={receiptIncome}
+                  setPaymentAmount={setPaymentAmount}
+                  setPaymentBill={setPaymentBill}
+                  setReceiptAmount={setReceiptAmount}
+                  setReceiptIncome={setReceiptIncome}
                   submitting={submitting}
                   totalExpected={totalExpected}
                   totalPaid={totalPaid}
                   totalUnpaid={totalUnpaid}
                   onMarkPaid={handleMarkPaid}
-                  onOpenPartialPayment={openPartialPayment}
-                  onSubmitPartialPayment={handlePartialPaymentSubmit}
+                  onMarkReceived={handleMarkReceived}
+                  onOpenPayment={openPaymentForm}
+                  onOpenReceipt={openReceiptForm}
+                  onSubmitPayment={handlePaymentSubmit}
+                  onSubmitReceipt={handleReceiptSubmit}
                 />
               ),
             },

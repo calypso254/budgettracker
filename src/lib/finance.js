@@ -152,6 +152,10 @@ export function isIncome(transaction) {
   return normalizeText(transaction.Type) === 'income'
 }
 
+function isActiveRecurringItem(item) {
+  return !['inactive', 'archived', 'paused'].includes(normalizeText(item.Status))
+}
+
 function matchesBill(transaction, billName) {
   const normalizedBillName = normalizeText(billName)
 
@@ -176,7 +180,7 @@ export function buildBillSnapshots(recurringBills, transactions, today) {
   const currentMonthKey = getMonthKey(today)
 
   return recurringBills
-    .filter((bill) => !['inactive', 'archived', 'paused'].includes(normalizeText(bill.Status)))
+    .filter((bill) => isActiveRecurringItem(bill))
     .map((bill) => {
       const expected = parseAmount(bill.Expected_Amount)
       const dueDay = clampDueDay(today.getFullYear(), today.getMonth(), bill.Due_Day)
@@ -233,6 +237,85 @@ export function buildBillSnapshots(recurringBills, transactions, today) {
     })
 }
 
+export function buildIncomeSnapshots(recurringIncome, transactions, today) {
+  const currentMonthKey = getMonthKey(today)
+
+  return recurringIncome
+    .filter((income) => isActiveRecurringItem(income))
+    .map((income) => {
+      const expected = parseAmount(income.Expected_Amount)
+      const depositDay = clampDueDay(
+        today.getFullYear(),
+        today.getMonth(),
+        income.Deposit_Day,
+      )
+      const depositDate = new Date(today.getFullYear(), today.getMonth(), depositDay)
+      const monthlyReceipts = transactions
+        .filter((transaction) => {
+          return (
+            getMonthKey(transaction.Date) === currentMonthKey &&
+            isIncome(transaction) &&
+            matchesIncome(transaction, income.Income_Name)
+          )
+        })
+        .sort((left, right) => String(right.Date).localeCompare(String(left.Date)))
+      const received = monthlyReceipts.reduce(
+        (total, transaction) => total + parseAmount(transaction.Amount),
+        0,
+      )
+      const receivedCapped = Math.min(expected, received)
+      const remaining = Math.max(expected - receivedCapped, 0)
+      const daysUntilDeposit = dayDifference(today, depositDate)
+
+      let displayStatus = 'Pending'
+
+      if (remaining <= 0) {
+        displayStatus = 'Received'
+      } else if (receivedCapped > 0) {
+        displayStatus = daysUntilDeposit < 0 ? 'Overdue' : 'Partially Received'
+      } else if (daysUntilDeposit < 0) {
+        displayStatus = 'Overdue'
+      }
+
+      return {
+        ...income,
+        expected,
+        receivedCapped,
+        remaining,
+        progress: expected > 0 ? Math.min(receivedCapped / expected, 1) : 0,
+        depositDay,
+        daysUntilDeposit,
+        displayStatus,
+        latestReceiptDate: monthlyReceipts[0]?.Date ?? '',
+      }
+    })
+    .sort((left, right) => {
+      if (left.remaining === 0 && right.remaining > 0) {
+        return 1
+      }
+
+      if (left.remaining > 0 && right.remaining === 0) {
+        return -1
+      }
+
+      return left.daysUntilDeposit - right.daysUntilDeposit
+    })
+}
+
+export function getCurrentMonthIncomeTotal(transactions, today) {
+  const currentMonthKey = getMonthKey(today)
+
+  return transactions
+    .filter((transaction) => {
+      return getMonthKey(transaction.Date) === currentMonthKey && isIncome(transaction)
+    })
+    .reduce((total, transaction) => total + parseAmount(transaction.Amount), 0)
+}
+
+function matchesIncome(transaction, incomeName) {
+  return normalizeText(transaction.Payee_Source) === normalizeText(incomeName)
+}
+
 export function buildChartData(transactions, selectedBill) {
   const buckets = new Map()
 
@@ -280,7 +363,7 @@ export function buildChartData(transactions, selectedBill) {
 }
 
 export function getStatusTone(status) {
-  if (status === 'Paid') {
+  if (status === 'Paid' || status === 'Received') {
     return 'bg-[#006D77] text-white'
   }
 
@@ -288,7 +371,7 @@ export function getStatusTone(status) {
     return 'bg-[#FF6F61] text-[#2D3436]'
   }
 
-  if (status === 'Partially Paid') {
+  if (status === 'Partially Paid' || status === 'Partially Received') {
     return 'bg-[#F0F4F8] text-[#2D3436]'
   }
 
@@ -305,6 +388,18 @@ export function getDaysCopy(daysUntilDue) {
   }
 
   return `${daysUntilDue} day${daysUntilDue === 1 ? '' : 's'} until due`
+}
+
+export function getDepositCopy(daysUntilDeposit) {
+  if (daysUntilDeposit === 0) {
+    return 'Deposit today'
+  }
+
+  if (daysUntilDeposit < 0) {
+    return `${Math.abs(daysUntilDeposit)} day${Math.abs(daysUntilDeposit) === 1 ? '' : 's'} late`
+  }
+
+  return `${daysUntilDeposit} day${daysUntilDeposit === 1 ? '' : 's'} until deposit`
 }
 
 export function buildNotificationMessage(sheetConfigured) {
