@@ -284,11 +284,15 @@ export function getStatusTone(status) {
     return 'bg-[#006D77] text-white'
   }
 
+  if (status === 'Overdue') {
+    return 'bg-[#FF6F61] text-[#2D3436]'
+  }
+
   if (status === 'Partially Paid') {
     return 'bg-[#F0F4F8] text-[#2D3436]'
   }
 
-  return 'bg-[#FF6F61] text-[#2D3436]'
+  return 'bg-white text-[#2D3436]'
 }
 
 export function getDaysCopy(daysUntilDue) {
@@ -305,10 +309,7 @@ export function getDaysCopy(daysUntilDue) {
 
 export function buildNotificationMessage(sheetConfigured) {
   return sheetConfigured
-    ? {
-        tone: 'info',
-        text: 'Google Sheets credentials detected. Sync to pull your live Transactions and Recurring_Bills tabs.',
-      }
+    ? null
     : {
         tone: 'info',
         text: 'Running with local preview data. Add VITE_GOOGLE_API_KEY, VITE_GOOGLE_CLIENT_ID, and VITE_GOOGLE_SHEET_ID to connect your sheet.',

@@ -66,6 +66,24 @@ export function createDemoSeed() {
       Status: 'Active',
     },
   ]
+  const recurringIncome = [
+    {
+      Income_Name: 'Design Retainer',
+      Category: 'Salary',
+      Expected_Amount: '2450',
+      Deposit_Day: '1',
+      Status: 'Active',
+      Notes: 'Monthly operating draw',
+    },
+    {
+      Income_Name: 'Maple Duplex',
+      Category: 'Rental Property',
+      Expected_Amount: '950',
+      Deposit_Day: '5',
+      Status: 'Active',
+      Notes: 'Rental income',
+    },
+  ]
 
   const transactions = []
 
@@ -168,6 +186,7 @@ export function createDemoSeed() {
 
   return {
     recurringBills,
+    recurringIncome,
     transactions: sortTransactionsNewestFirst(transactions),
   }
 }

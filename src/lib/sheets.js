@@ -26,6 +26,15 @@ export const RECURRING_BILLS_HEADERS = [
   'Status',
 ]
 
+export const RECURRING_INCOME_HEADERS = [
+  'Income_Name',
+  'Category',
+  'Expected_Amount',
+  'Deposit_Day',
+  'Status',
+  'Notes',
+]
+
 let gisScriptPromise
 let clientInitPromise
 let tokenClient
@@ -43,6 +52,27 @@ function assertSheetsConfiguration() {
       'Missing Google Sheets configuration. Set VITE_GOOGLE_API_KEY, VITE_GOOGLE_CLIENT_ID, and VITE_GOOGLE_SHEET_ID in your .env file.',
     )
   }
+}
+
+function extractSheetsErrorMessage(error) {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+
+  return (
+    error?.result?.error?.message ||
+    error?.body ||
+    'Google Sheets request failed.'
+  )
+}
+
+function isMissingSheetError(error) {
+  const message = extractSheetsErrorMessage(error)
+
+  return (
+    message.includes('Unable to parse range') ||
+    message.includes('Requested entity was not found')
+  )
 }
 
 function normalizeRows(values) {
@@ -157,15 +187,27 @@ async function ensureSheetsAccess() {
   await accessPromise
 }
 
-async function listSheetRows(sheetName) {
+async function listSheetRows(sheetName, { optional = false } = {}) {
   await ensureSheetsAccess()
 
-  const response = await gapi.client.sheets.spreadsheets.values.get({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `${sheetName}!A:Z`,
-  })
+  try {
+    const response = await gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${sheetName}!A:Z`,
+    })
 
-  return normalizeRows(response.result.values || [])
+    return normalizeRows(response.result.values || [])
+  } catch (error) {
+    if (optional && isMissingSheetError(error)) {
+      return []
+    }
+
+    if (isMissingSheetError(error)) {
+      throw new Error(`Missing "${sheetName}" tab in Google Sheet.`)
+    }
+
+    throw new Error(extractSheetsErrorMessage(error))
+  }
 }
 
 async function appendRow(sheetName, headers, row) {
@@ -173,15 +215,23 @@ async function appendRow(sheetName, headers, row) {
 
   const values = [headers.map((header) => row[header] ?? '')]
 
-  await gapi.client.sheets.spreadsheets.values.append({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    range: `${sheetName}!A:Z`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    resource: {
-      values,
-    },
-  })
+  try {
+    await gapi.client.sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEET_ID,
+      range: `${sheetName}!A:Z`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      resource: {
+        values,
+      },
+    })
+  } catch (error) {
+    if (isMissingSheetError(error)) {
+      throw new Error(`Missing "${sheetName}" tab in Google Sheet.`)
+    }
+
+    throw new Error(extractSheetsErrorMessage(error))
+  }
 }
 
 export function isSheetsConfigured() {
@@ -189,14 +239,16 @@ export function isSheetsConfigured() {
 }
 
 export async function fetchFinPixelData() {
-  const [transactions, recurringBills] = await Promise.all([
+  const [transactions, recurringBills, recurringIncome] = await Promise.all([
     listSheetRows('Transactions'),
     listSheetRows('Recurring_Bills'),
+    listSheetRows('Recurring_Income', { optional: true }),
   ])
 
   return {
     transactions,
     recurringBills,
+    recurringIncome,
   }
 }
 
@@ -206,6 +258,10 @@ export async function appendTransaction(transaction) {
 
 export async function appendRecurringBill(recurringBill) {
   await appendRow('Recurring_Bills', RECURRING_BILLS_HEADERS, recurringBill)
+}
+
+export async function appendRecurringIncome(recurringIncome) {
+  await appendRow('Recurring_Income', RECURRING_INCOME_HEADERS, recurringIncome)
 }
 
 export async function signOutSheets() {

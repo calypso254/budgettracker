@@ -6,6 +6,7 @@ FinPixel is a React + Vite budgeting app with:
 - a local preview mode
 - optional Google Sheets sync
 - recurring bill tracking
+- recurring income setup
 - partial payments
 - trend charts with Recharts
 
@@ -90,6 +91,16 @@ Required headers:
 Bill_Name, Category, Expected_Amount, Due_Day, Status
 ```
 
+### `Recurring_Income`
+
+Add this tab if you want to use the recurring income form.
+
+Required headers:
+
+```text
+Income_Name, Category, Expected_Amount, Deposit_Day, Status, Notes
+```
+
 ## Scripts
 
 ```powershell
@@ -111,7 +122,7 @@ npm run lint
 
 - Confirm `VITE_GOOGLE_API_KEY`, `VITE_GOOGLE_CLIENT_ID`, and `VITE_GOOGLE_SHEET_ID` are set
 - Make sure the spreadsheet is shared with the Google account you use in the browser
-- Confirm both required tabs exist with the exact header names shown above
+- Confirm the sheet tabs exist with the exact header names shown above
 
 ### The app starts but uses local data
 
