@@ -47,13 +47,55 @@ const MONTH_FORMATTER = new Intl.DateTimeFormat('en-US', {
 })
 
 export const DEMO_SEED = createDemoSeed()
+const UNLOCK_STORAGE_KEY = 'finpixel-unlocked'
 
-export function getStoredUnlockState() {
+function getBrowserStorage(storageName) {
   if (typeof window === 'undefined') {
-    return false
+    return null
   }
 
-  return window.sessionStorage.getItem('finpixel-unlocked') === 'true'
+  return window[storageName] ?? null
+}
+
+function readStorageValue(storage, key) {
+  try {
+    return storage?.getItem(key) ?? null
+  } catch {
+    return null
+  }
+}
+
+function writeStorageValue(storage, key, value) {
+  try {
+    storage?.setItem(key, value)
+  } catch {
+    // Ignore blocked storage so the app can keep running in memory.
+  }
+}
+
+function removeStorageValue(storage, key) {
+  try {
+    storage?.removeItem(key)
+  } catch {
+    // Ignore blocked storage so the app can keep running in memory.
+  }
+}
+
+export function getStoredUnlockState() {
+  return (
+    readStorageValue(getBrowserStorage('localStorage'), UNLOCK_STORAGE_KEY) === 'true' ||
+    readStorageValue(getBrowserStorage('sessionStorage'), UNLOCK_STORAGE_KEY) === 'true'
+  )
+}
+
+export function storeUnlockState() {
+  writeStorageValue(getBrowserStorage('localStorage'), UNLOCK_STORAGE_KEY, 'true')
+  removeStorageValue(getBrowserStorage('sessionStorage'), UNLOCK_STORAGE_KEY)
+}
+
+export function clearStoredUnlockState() {
+  removeStorageValue(getBrowserStorage('localStorage'), UNLOCK_STORAGE_KEY)
+  removeStorageValue(getBrowserStorage('sessionStorage'), UNLOCK_STORAGE_KEY)
 }
 
 function normalizeText(value) {

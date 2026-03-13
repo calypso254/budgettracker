@@ -7,6 +7,7 @@ const GOOGLE_SCOPES =
   import.meta.env.VITE_GOOGLE_SCOPES || 'https://www.googleapis.com/auth/spreadsheets'
 const SHEETS_DISCOVERY_DOC =
   'https://sheets.googleapis.com/$discovery/rest?version=v4'
+const SHEETS_AUTH_STORAGE_KEY = 'finpixel-google-auth'
 
 export const TRANSACTIONS_HEADERS = [
   'Date',
@@ -39,6 +40,38 @@ let gisScriptPromise
 let clientInitPromise
 let tokenClient
 let accessPromise
+
+function getLocalStorage() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  return window.localStorage ?? null
+}
+
+function hasStoredSheetsAuthorization() {
+  try {
+    return getLocalStorage()?.getItem(SHEETS_AUTH_STORAGE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function storeSheetsAuthorization() {
+  try {
+    getLocalStorage()?.setItem(SHEETS_AUTH_STORAGE_KEY, 'true')
+  } catch {
+    // Ignore blocked storage so auth can still work for the current tab.
+  }
+}
+
+function clearStoredSheetsAuthorization() {
+  try {
+    getLocalStorage()?.removeItem(SHEETS_AUTH_STORAGE_KEY)
+  } catch {
+    // Ignore blocked storage so auth can still work for the current tab.
+  }
+}
 
 function loadGoogleApiClient(apiName) {
   return new Promise((resolve) => {
@@ -154,7 +187,7 @@ async function initializeSheetsClient() {
   return clientInitPromise
 }
 
-function requestAccessToken() {
+function requestAccessToken({ prompt = 'consent' } = {}) {
   return new Promise((resolve, reject) => {
     tokenClient.callback = (response) => {
       if (response?.error) {
@@ -162,12 +195,11 @@ function requestAccessToken() {
         return
       }
 
+      storeSheetsAuthorization()
       resolve(response)
     }
 
-    tokenClient.requestAccessToken({
-      prompt: gapi.client.getToken() ? '' : 'consent',
-    })
+    tokenClient.requestAccessToken({ prompt })
   })
 }
 
@@ -179,7 +211,18 @@ async function ensureSheetsAccess() {
   }
 
   if (!accessPromise) {
-    accessPromise = requestAccessToken().finally(() => {
+    accessPromise = (async () => {
+      if (hasStoredSheetsAuthorization()) {
+        try {
+          await requestAccessToken({ prompt: '' })
+          return
+        } catch {
+          clearStoredSheetsAuthorization()
+        }
+      }
+
+      await requestAccessToken({ prompt: 'consent' })
+    })().finally(() => {
       accessPromise = null
     })
   }
@@ -268,9 +311,11 @@ export async function signOutSheets() {
   const token = gapi.client.getToken()
 
   if (!token) {
+    clearStoredSheetsAuthorization()
     return
   }
 
   window.google.accounts.oauth2.revoke(token.access_token)
   gapi.client.setToken(null)
+  clearStoredSheetsAuthorization()
 }

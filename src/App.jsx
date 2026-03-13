@@ -1,7 +1,9 @@
 import { lazy, Suspense, startTransition, useState } from 'react'
 import Accordion from './components/Accordion.jsx'
+import BillsSection from './components/BillsSection.jsx'
 import DashboardSection from './components/DashboardSection.jsx'
 import DataEntrySection from './components/DataEntrySection.jsx'
+import IncomeSection from './components/IncomeSection.jsx'
 import { NoticeBar, PixelMark } from './components/Display.jsx'
 import {
   appendRecurringBill,
@@ -16,6 +18,7 @@ import {
   buildChartData,
   buildNotificationMessage,
   CHART_OPTIONS,
+  clearStoredUnlockState,
   DEFAULT_CATEGORIES,
   DEMO_SEED,
   formatAmount,
@@ -26,15 +29,19 @@ import {
   isExpense,
   parseAmount,
   sortTransactionsNewestFirst,
+  storeUnlockState,
 } from './lib/finance.js'
 
-const APP_PASSWORD = import.meta.env.VITE_FINPIXEL_PASSWORD || 'finpixel'
+const APP_PASSWORD = import.meta.env.VITE_FINPIXEL_PASSWORD?.trim() || ''
+const PASSWORD_REQUIRED = Boolean(APP_PASSWORD)
 const TrendsSection = lazy(() => import('./components/TrendsSection.jsx'))
 
 function App() {
   const today = new Date()
   const sheetConfigured = isSheetsConfigured()
-  const [isUnlocked, setIsUnlocked] = useState(getStoredUnlockState)
+  const [isUnlocked, setIsUnlocked] = useState(() =>
+    PASSWORD_REQUIRED ? getStoredUnlockState() : true,
+  )
   const [passwordEntry, setPasswordEntry] = useState('')
   const [authError, setAuthError] = useState('')
   const [transactions, setTransactions] = useState(DEMO_SEED.transactions)
@@ -271,19 +278,19 @@ function App() {
 
     if (passwordEntry !== APP_PASSWORD) {
       setAuthError(
-        'Password mismatch. Update VITE_FINPIXEL_PASSWORD or enter the current shared password.',
+        'Password mismatch. Update VITE_FINPIXEL_PASSWORD or enter the current password.',
       )
       return
     }
 
-    window.sessionStorage.setItem('finpixel-unlocked', 'true')
+    storeUnlockState()
     setIsUnlocked(true)
     setAuthError('')
     setPasswordEntry('')
   }
 
   function handleLock() {
-    window.sessionStorage.removeItem('finpixel-unlocked')
+    clearStoredUnlockState()
     setIsUnlocked(false)
     setNotice(buildNotificationMessage(sheetConfigured))
   }
@@ -552,8 +559,13 @@ function App() {
             <p className="label">Password gate</p>
             <h2 className="mt-4 text-3xl font-bold">Unlock the dashboard</h2>
             <p className="mt-3 text-sm text-[#6B777A]">
-              Set <code>VITE_FINPIXEL_PASSWORD</code> in your local environment to
-              replace the default preview password.
+              Leave <code>VITE_FINPIXEL_PASSWORD</code> empty to skip this screen.
+              If you keep a password, this browser will remember the unlock until you
+              lock it.
+            </p>
+            <p className="mt-3 text-sm text-[#6B777A]">
+              Google Sheets access is separate from this local password and may still
+              ask for approval when Google cannot silently reuse your token.
             </p>
             <form className="mt-8 space-y-5" onSubmit={handleUnlock}>
               <label className="block">
@@ -637,7 +649,9 @@ function App() {
                 </article>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div
+                className={`grid gap-3 ${PASSWORD_REQUIRED ? 'sm:grid-cols-2' : ''}`}
+              >
                 <button
                   className="button-primary w-full text-sm"
                   type="button"
@@ -646,13 +660,15 @@ function App() {
                 >
                   {syncing ? 'Syncing...' : 'Sync Google Sheet'}
                 </button>
-                <button
-                  className="button-secondary w-full text-sm"
-                  type="button"
-                  onClick={handleLock}
-                >
-                  Lock Dashboard
-                </button>
+                {PASSWORD_REQUIRED ? (
+                  <button
+                    className="button-secondary w-full text-sm"
+                    type="button"
+                    onClick={handleLock}
+                  >
+                    Lock Dashboard
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -666,40 +682,70 @@ function App() {
             {
               id: 'dashboard',
               eyebrow: 'Section 1',
-              title: 'Dashboard, Bills, and Income',
-              subtitle: 'Monthly totals, bill payments, and recurring income receipts.',
-              meta: `${billSnapshots.filter((bill) => bill.remaining > 0).length} open bills, ${incomeSnapshots.filter((income) => income.remaining > 0).length} income sources pending`,
+              title: 'Dashboard',
+              subtitle: 'Monthly totals, net flow, and overall bill progress.',
+              meta: `${formatAmount(currentMonthIncome - currentMonthExpenses)} net flow`,
               content: (
                 <DashboardSection
-                  billSnapshots={billSnapshots}
                   currentMonthExpenses={currentMonthExpenses}
                   currentMonthIncome={currentMonthIncome}
                   currentMonthKey={currentMonthKey}
-                  incomeSnapshots={incomeSnapshots}
+                  totalExpected={totalExpected}
+                  totalBillsOpen={
+                    billSnapshots.filter((bill) => bill.remaining > 0).length
+                  }
+                  totalBillsPaid={
+                    billSnapshots.filter((bill) => bill.displayStatus === 'Paid').length
+                  }
+                  totalPaid={totalPaid}
+                  totalUnpaid={totalUnpaid}
+                />
+              ),
+            },
+            {
+              id: 'bills',
+              eyebrow: 'Section 2',
+              title: 'Bills',
+              subtitle:
+                'Track monthly bill payments and log partial or full payments.',
+              meta: `${billSnapshots.filter((bill) => bill.remaining > 0).length} open bills`,
+              content: (
+                <BillsSection
+                  billSnapshots={billSnapshots}
                   paymentAmount={paymentAmount}
                   paymentBill={paymentBill}
-                  receiptAmount={receiptAmount}
-                  receiptIncome={receiptIncome}
                   setPaymentAmount={setPaymentAmount}
                   setPaymentBill={setPaymentBill}
+                  submitting={submitting}
+                  onMarkPaid={handleMarkPaid}
+                  onOpenPayment={openPaymentForm}
+                  onSubmitPayment={handlePaymentSubmit}
+                />
+              ),
+            },
+            {
+              id: 'income',
+              eyebrow: 'Section 3',
+              title: 'Income',
+              subtitle: 'Track recurring income and log receipts against each source.',
+              meta: `${incomeSnapshots.filter((income) => income.remaining > 0).length} pending`,
+              content: (
+                <IncomeSection
+                  incomeSnapshots={incomeSnapshots}
+                  receiptAmount={receiptAmount}
+                  receiptIncome={receiptIncome}
                   setReceiptAmount={setReceiptAmount}
                   setReceiptIncome={setReceiptIncome}
                   submitting={submitting}
-                  totalExpected={totalExpected}
-                  totalPaid={totalPaid}
-                  totalUnpaid={totalUnpaid}
-                  onMarkPaid={handleMarkPaid}
                   onMarkReceived={handleMarkReceived}
-                  onOpenPayment={openPaymentForm}
                   onOpenReceipt={openReceiptForm}
-                  onSubmitPayment={handlePaymentSubmit}
                   onSubmitReceipt={handleReceiptSubmit}
                 />
               ),
             },
             {
               id: 'entry',
-              eyebrow: 'Section 2',
+              eyebrow: 'Section 4',
               title: 'Data Entry',
               subtitle:
                 'Append recurring bills, recurring income, and transaction rows into the connected Google Sheet.',
@@ -721,7 +767,7 @@ function App() {
             },
             {
               id: 'trends',
-              eyebrow: 'Section 3',
+              eyebrow: 'Section 5',
               title: 'Trends and Visuals',
               subtitle:
                 'Bold line charts for bill history, overall expenses, income, and income versus expenses.',
